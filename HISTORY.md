@@ -1791,3 +1791,27 @@ lightning,festival} hold the dumps and scripts (git-ignored).
   the archive/* tags pushed, the rewritten tags force-pushed, 18 old branches deleted on GitHub; the old worktrees removed
   (their build folders kept in build/old_worktrees). GitHub's pull request #1 (refs/pull/1/head, read-only) still pins the
   old commits: a GitHub Support request ("remove sensitive data": the PR's refs and cached views) finishes the purge.
+
+
+## Plugin API, version 1 (a contributor's PR: the API only, no plugin in it)
+- Scripts/sv_plugins.lua, the last part (main.lua's MODULES): other mods' special rounds. A plugin is a file
+  AC8SurvivalMode/plugins/<name>.lua that Survival runs in its own Lua state after every part has loaded (UE4SS gives
+  every Lua mod its own state, so another mod can't reach SPC.kinds); it calls SVP.register(kind, def) to add a kind
+  to SPC.kinds with its callbacks (spawn / tick / busy / over / row / ready / alone / aircraft / budget / hold), its
+  settings' defaults (CFG.specials[kind], [specials.<kind>] in survival.ini read over them) and whether it joins the
+  rotation (only when the player's rotation is the shipped one). Found with UE4SS's IterateGameDirectories;
+  plugins\plugins.txt (one file name a line) when there's none.
+- SVP (every name 15 characters or fewer): register, target / untarget / kill / alive (a plugin's targets watched on
+  each tick of its round: gone or no health = down, paid x the round's tier as the Spaceport's ships unless flat, a
+  ground or air stat), pay, load / spawn / move / despawn (the plugin's own container's actors, Survival's deferred
+  spawn), players, pad (Mission 22's shuttle), runway, clock, round, levelGoing, callout, say, log, isHost, inCoop.
+  send / on are version 2's co-op channel (stubs now).
+- Every plugin callback runs in a pcall: its first error is logged and switches the plugin off (busy false, ready false,
+  its targets off the watch); a plugin failing at load has its kinds taken off again. Version 1 is solo only: a
+  plugin's kind never comes in co-op.
+- A run with a plugin loaded isn't ranked (LB.edited lists "plugin <name>"), as with survival_config.lua.
+- Nothing of a plugin's ships in Survival. tools/re/PLUGINS.md has the API.
+- Checked: lua_check.py over every part; lua_load_test.lua (every part loads, with and without a plugin);
+  leaderboard_test.lua (plain: the same 2 failures as main's, a non-Latin pilot name on the contributor's Lua),
+  fishing_test.lua; the contributor's API test (discovery, register, ini, rotation, targets and pay, a broken and a
+  failing plugin, co-op refusal). Not yet in game.
