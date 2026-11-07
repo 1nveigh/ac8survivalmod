@@ -21,6 +21,12 @@
 --   SVP.kill(id, why)           counted down now (the plugin decided it: a scripted kill), paid as above
 --   SVP.alive(id)               whether it's still up
 --   SVP.pay(n, why)             zollars (addCredits)
+--   SVP.load(path)              an object of the plugin's own container by its path (sv_core.lua loadObject: hard
+--                               rule 9), or nil and why
+--   SVP.spawn(cls, at, yaw)     an actor of class `cls` (a class or its path, "/Game/Mods/<its own>/...C") at `at`
+--                               (X Y Z cm), turned `yaw` degrees; the actor, or nil and why. Survival's own way
+--                               (GameplayStatics' deferred spawn, as its effects': sv_anomalies.lua SPC.V.billboard)
+--   SVP.move(a, at, yaw)        moves (teleports) a plugin's actor; SVP.despawn(a) destroys it
 --   SVP.players()               { { slot, X, Y, Z } }: you (co-op's other players from version 2)
 --   SVP.pad()                   the Comona spaceport's shuttle pad (Mission 22's AA_Obj_01_Ground0_Shuttle_0), cm
 --   SVP.runway()                Comona Airport's runway, the spawn anchor (AIRFIELD), cm
@@ -212,6 +218,51 @@ do
     function SVP.pay(n, why)
         n = math.floor(tonumber(n) or 0)
         if n ~= 0 then addCredits(n, tostring(why or "a plugin's round")) end
+    end
+    function SVP.load(path)
+        if type(path) ~= "string" then return nil, "a path" end
+        return loadObject(path)
+    end
+    local function xform(at, yaw)
+        local h = math.rad(tonumber(yaw) or 0) / 2
+        return { Rotation = { X = 0, Y = 0, Z = math.sin(h), W = math.cos(h) },
+                 Translation = { X = at.X, Y = at.Y, Z = at.Z or 0 }, Scale3D = { X = 1, Y = 1, Z = 1 } }
+    end
+    function SVP.spawn(cls, at, yaw)
+        if type(at) ~= "table" then return nil, "no spot" end
+        if SVP.levelGoing() then return nil, "the level is going away" end
+        if type(cls) == "string" then
+            local c, why = loadObject(cls)
+            if not valid(c) then return nil, "class " .. cls .. " not loaded: " .. tostring(why) end
+            cls = c
+        end
+        local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+        if not (valid(gs) and valid(cls)) then return nil, "no GameplayStatics or class" end
+        local t = xform(at, yaw)
+        local okA, a = pcall(function()
+            local x = gs:BeginDeferredActorSpawnFromClass(survivalPC, cls, t, 1, nil, 1)   -- (AlwaysSpawn, MultiplyWithRoot)
+            return gs:FinishSpawningActor(x, t, 1)
+        end)
+        if not okA or not valid(a) then return nil, "not spawned (" .. tostring(a) .. ")" end
+        crumb("plugin spawn " .. tostring(cls:GetFullName()):sub(1, 120))
+        return a
+    end
+    function SVP.move(a, at, yaw)
+        if not (liveAddr(a) and type(at) == "table") then return false end
+        local ok = pcall(function()
+            if yaw ~= nil then
+                a:K2_SetActorLocationAndRotation({ X = at.X, Y = at.Y, Z = at.Z or 0 }, { Pitch = 0, Yaw = tonumber(yaw) or 0, Roll = 0 },
+                    false, {}, true)
+            else
+                a:K2_SetActorLocation({ X = at.X, Y = at.Y, Z = at.Z or 0 }, false, {}, true)
+            end
+        end)
+        return ok
+    end
+    function SVP.despawn(a)
+        if not liveAddr(a) then return false end
+        crumb("plugin despawn")
+        return (pcall(function() a:K2_DestroyActor() end))
     end
     function SVP.players()
         local l = playerLocation()
