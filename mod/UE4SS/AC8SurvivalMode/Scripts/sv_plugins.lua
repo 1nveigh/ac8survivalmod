@@ -36,6 +36,11 @@
 --   SVP.callout(text, sub)      the round callout (hudCallout); SVP.say(who, text, secs) the subtitle strip (SUB.say)
 --   SVP.log(msg)                Survival's log, the plugin's name first
 --   SVP.isHost(), SVP.inCoop()  version 1: true / false (a plugin round never comes in co-op yet)
+--   SVP.every(fn)               fn(now) on the game thread from Survival's own tick (every 250 ms, main menu too;
+--                               `now` = os.clock()). A plugin must never use LoopAsync, ExecuteInGameThread,
+--                               ExecuteWithDelay or RegisterKeyBind itself: they run its Lua off the game thread in
+--                               Survival's one Lua state, which crashes the game (HISTORY 0.73.82; our own test of
+--                               2026-11-07: a plugin's LoopAsync + ExecuteInGameThread aborted the game at launch)
 --   SVP.send, SVP.on            co-op's message channel: version 2 (stubs now: send returns false)
 -- A plugin's callbacks run in a pcall: its first error is logged once and the plugin is switched off (its round, if
 -- one is on, ends as soon as Survival's checks allow: busy false, its targets taken off the watch).
@@ -279,6 +284,18 @@ do
     function SVP.log(msg) plog(PLUGINS.current or PLUGINS.running, msg) end
     function SVP.isHost() return not (COOP and COOP.client and COOP.client()) end
     function SVP.inCoop() return (COOP and COOP.open) == true end
+    PLUGINS.every = {}
+    function SVP.every(fn)
+        local p = PLUGINS.current or PLUGINS.running
+        if not (p and type(fn) == "function") then return false end
+        PLUGINS.every[#PLUGINS.every + 1] = { p = p, fn = guard(p, "every", fn) }
+        return true
+    end
+    -- (sv_main.lua's tick job, on the game thread, each tick's second half)
+    function PLUGINS.tick()
+        local now = os.clock()
+        for _, e in ipairs(PLUGINS.every) do if not e.p.off then e.fn(now) end end
+    end
     function SVP.send() return false end
     function SVP.on() return false end
 

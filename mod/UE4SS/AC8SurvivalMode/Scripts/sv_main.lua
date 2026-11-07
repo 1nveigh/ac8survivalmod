@@ -993,6 +993,7 @@ local function tickJob()
         local t1 = os.clock()
         local okB, errB = pcall(probeTickB, tick)
         if not okB then log("round probe: error (second half) " .. tostring(errB)) end
+        if PLUGINS and PLUGINS.tick then PLUGINS.tick() end   -- (plugins' SVP.every: sv_plugins.lua; guarded there)
         if tick % 4 == 3 then timed("speakers", ALLY.speakerTick, D ~= nil) end   -- the run's ally speakers, on and off
         if tick % 4 == 1 then timed("leaderboard", LB.poll) end                  -- the leaderboard sends' answers
         if tick % 20 == 7 then timed("leaderboard", LB.queueTick) end            -- runs waiting to be sent
