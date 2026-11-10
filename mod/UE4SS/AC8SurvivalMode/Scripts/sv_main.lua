@@ -321,7 +321,10 @@ local function planeSweep(slot)
                 goneWithLevel(p, LEAVE.why)
             else
                 p.down = true
-                if dead then
+                local ret = PLUGINS and PLUGINS.retired and PLUGINS.retired[p.addr or addrOf(p.obj) or 0]
+                if ret then                                                    -- (a plugin's unit the game was made to
+                    PLUGINS.retiredSeen = (PLUGINS.retiredSeen or 0) + 1       -- retire, SVP.retire: no kill, no pay)
+                elseif dead then
                     pcall(KILL.read, p)                                        -- (the last hits: it's still there)
                     downCounted(p, you, D and D.now)
                 elseif D then                                                  -- (gone without its death seen: held)
