@@ -23,6 +23,8 @@
 --   SVP.pay(n, why)             zollars (addCredits)
 --   SVP.load(path)              an object of the plugin's own container by its path (sv_core.lua loadObject: hard
 --                               rule 9), or nil and why
+--   SVP.hold2d(path)            a 2D sound of the plugin's container held ready (its audio component, not playing,
+--                               kept for the level): play2d then plays it with no lookup and no spawn
 --   SVP.spawn(cls, at, yaw)     an actor of class `cls` (a class or its path, "/Game/Mods/<its own>/...C") at `at`
 --                               (X Y Z cm), turned `yaw` degrees; the actor, or nil and why. Survival's own way
 --                               (GameplayStatics' deferred spawn, as its effects': sv_anomalies.lua SPC.V.billboard)
@@ -433,20 +435,25 @@ do
     -- (sv_escort_laser.lua's sound / fx, sv_decoy.lua's sure kill), so a plugin needs no UE calls of its own for them.
     -- (an asset a plugin plays: found ones kept while valid, a miss kept 30 s, so a sound missing from the pack isn't
     -- looked up and loaded again on every play: 15-46 ms each, the Excalibur round's radio / laser, 11-09)
+    local function fullPath(path)
+        return path:find(".", 1, true) and path or (path .. "." .. path:match("[^/]+$"))
+    end
+    local plWhy = "?"                                    -- (how the last plAsset got its object: the p2dMs line)
     local function plAsset(path)
         if type(path) ~= "string" then return nil end
-        local full = path:find(".", 1, true) and path or (path .. "." .. path:match("[^/]+$"))
+        local full = fullPath(path)
         local h = assetHit[full]
-        if h and valid(h) then return h end
+        if h and valid(h) then plWhy = "kept"; return h end
         local m = assetMiss[full]
-        if m and os.clock() - m < 30 then return nil end
+        if m and os.clock() - m < 30 then plWhy = "miss kept"; return nil end
         -- (Survival test 14: LoadObject took 14-20 ms even for a wave already in memory: an asset that's loaded is
         -- found first (StaticFindObject, well under 1 ms), so a plugin can load its assets ahead and play them cheaply)
         local okF, f = pcall(StaticFindObject, full)
-        if okF and valid(f) then assetHit[full], assetMiss[full] = f, nil; return f end
+        if okF and valid(f) then assetHit[full], assetMiss[full] = f, nil; plWhy = "found"; return f end
         local o = loadObject(full)
-        if valid(o) then assetHit[full], assetMiss[full] = o, nil; return o end
+        if valid(o) then assetHit[full], assetMiss[full] = o, nil; plWhy = "loaded"; return o end
         assetHit[full], assetMiss[full] = nil, os.clock()
+        plWhy = "miss"
         return nil
     end
     local soundWay = nil                            -- (PostEventAtLocation's two signatures: the first that works kept)
@@ -488,9 +495,42 @@ do
     -- (SVP.p2dMs: the last play's parts in ms, asset / statics / pc / spawn / duration: the Excalibur round's lines
     -- cost 16-37 ms each to start even when the wave is in memory, 11-09; which part)
     local gsObj
+    -- (11-10, the voice-line stutter: every line start spent 20-38 ms in plAsset, loaded ahead or not (Excalibur's
+    -- 7:08 am run): a wave that has been played holds no reference once its spawned component is gone, so the next
+    -- play finds / loads it again. A HELD audio component (CreateSound2D, not playing, never auto-destroyed) keeps the
+    -- wave alive and plays it with no spawn: SVP.hold2d(path) makes one; play2d uses it when it isn't already playing.
+    -- Held components belong to the level: gone with it, made again on the next hold2d)
+    local held2d = {}
+    function SVP.hold2d(path)
+        if type(path) ~= "string" then return nil, "a path" end
+        if SVP.levelGoing() then return nil, "the level is going away" end
+        local full = fullPath(path)
+        local h = held2d[full]
+        if h and valid(h) then return h end
+        local sw = plAsset(path)
+        if not valid(gsObj) then gsObj = StaticFindObject("/Script/Engine.Default__GameplayStatics") end
+        if not (sw and valid(gsObj) and liveObj(survivalPC)) then return nil, "not loaded" end
+        local ok, comp = pcall(function() return gsObj:CreateSound2D(survivalPC, sw, 1.0, 1.0, 0.0, nil, false, false) end)
+        if not (ok and valid(comp)) then return nil, "CreateSound2D: " .. tostring(comp) end
+        held2d[full] = comp
+        return comp
+    end
     function SVP.play2d(path, volume)
         if SVP.levelGoing() then return false end
         local t0 = os.clock()
+        local h = type(path) == "string" and held2d[fullPath(path)]
+        if h and valid(h) then
+            local okP, playing = pcall(function() return h:IsPlaying() end)
+            if okP and not playing then
+                pcall(function() h:SetVolumeMultiplier(tonumber(volume) or 1.0) end)
+                local okPl = pcall(function() h:Play(0.0) end)
+                if okPl then
+                    local okD, d = pcall(function() return h.Sound.Duration end)
+                    SVP.p2dMs = string.format("held %.0f", (os.clock() - t0) * 1000)
+                    return true, (okD and type(d) == "number" and d > 0) and d or nil, h
+                end
+            end
+        end
         local sw = plAsset(path)
         local t1 = os.clock()
         if not valid(gsObj) then gsObj = StaticFindObject("/Script/Engine.Default__GameplayStatics") end
@@ -502,8 +542,8 @@ do
         local ok, comp = pcall(function() return gs:SpawnSound2D(survivalPC, sw, tonumber(volume) or 1.0, 1.0, 0.0, nil, false, true) end)
         local t4 = os.clock()
         local okD, d = pcall(function() return sw.Duration end)
-        SVP.p2dMs = string.format("asset %.0f / statics %.0f / pc %.0f / spawn %.0f / duration %.0f", (t1 - t0) * 1000,
-            (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000, (os.clock() - t4) * 1000)
+        SVP.p2dMs = string.format("asset %.0f (%s) / statics %.0f / pc %.0f / spawn %.0f / duration %.0f", (t1 - t0) * 1000,
+            plWhy, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000, (os.clock() - t4) * 1000)
         -- (the audio component third: comp:Stop() cuts the sound short)
         return ok, (okD and type(d) == "number" and d > 0) and d or nil, ok and comp or nil
     end
