@@ -319,12 +319,18 @@ do
     end
     local loadMiss = {}
     local assetHit, assetMiss = {}, {}               -- (plAsset's, below; SVP.load fills the hits too)
+    -- An asset or audio component kept in Lua is NOT kept alive by it: the game's garbage collection frees a sound wave
+    -- nothing references, and valid() (UE4SS IsValid) can pass on the freed memory. A kept object is used only while
+    -- liveObj says it is still the engine's live object; else it is looked up again. (Excalibur, 11-09 twice runs at
+    -- 12:4x and 8:33 pm: SpawnSound2D on the round-1 laser-shot wave freed since, AC8 crashed in
+    -- UAudioComponent::PlayInternal reading the "wave"'s vtable: exe+0x3fb7102 both times)
+    local function kept(o) return o ~= nil and liveObj(o) end
     function SVP.load(path)
         if type(path) ~= "string" then return nil, "a path" end
         local m = loadMiss[path]
         if m and os.clock() - m < 30 then return nil, "not found (kept 30 s)" end   -- (a miss isn't loaded again at once)
         local h = assetHit[path]
-        if h and valid(h) then return h end              -- (test 20: StaticFindObject by path costs 12-37 ms too: kept)
+        if h and kept(h) then return h end               -- (test 20: StaticFindObject by path costs 12-37 ms too: kept)
         local okF, f = pcall(StaticFindObject, path)     -- (already in memory: found, not loaded again)
         if okF and valid(f) then assetHit[path] = f; return f end
         local o, why = loadObject(path)
@@ -443,7 +449,7 @@ do
         if type(path) ~= "string" then return nil end
         local full = fullPath(path)
         local h = assetHit[full]
-        if h and valid(h) then plWhy = "kept"; return h end
+        if h and kept(h) then plWhy = "kept"; return h end
         local m = assetMiss[full]
         if m and os.clock() - m < 30 then plWhy = "miss kept"; return nil end
         -- (Survival test 14: LoadObject took 14-20 ms even for a wave already in memory: an asset that's loaded is
@@ -506,7 +512,7 @@ do
         if SVP.levelGoing() then return nil, "the level is going away" end
         local full = fullPath(path)
         local h = held2d[full]
-        if h and valid(h) then return h end
+        if h and kept(h) then return h end
         local sw = plAsset(path)
         if not valid(gsObj) then gsObj = StaticFindObject("/Script/Engine.Default__GameplayStatics") end
         if not (sw and valid(gsObj) and liveObj(survivalPC)) then return nil, "not loaded" end
@@ -519,7 +525,7 @@ do
         if SVP.levelGoing() then return false end
         local t0 = os.clock()
         local h = type(path) == "string" and held2d[fullPath(path)]
-        if h and valid(h) then
+        if h and kept(h) then
             local okP, playing = pcall(function() return h:IsPlaying() end)
             if okP and not playing then
                 pcall(function() h:SetVolumeMultiplier(tonumber(volume) or 1.0) end)
