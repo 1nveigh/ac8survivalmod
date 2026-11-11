@@ -614,7 +614,10 @@ do
         if type(EXC_HurtPlayer) == "function" then
             local pa, ca = addrOf and addrOf(a), causer and addrOf and addrOf(causer)
             if pa then
-                local okH, rc = pcall(EXC_HurtPlayer, pa, -(n * 10), ca or pa)
+                -- (11-11, run 35: EXC_HurtPlayer takes HEALTH points (the player's ModifyHealthInternal clamps health +
+                -- delta to MaxHealth, 113), not HealthInternal's x 10: -(n * 10) made every non-lethal hit 10x (an
+                -- 11-health UAV-B hit read 1130 -> 30). The x 10 below is right: it writes HealthInternal itself)
+                local okH, rc = pcall(EXC_HurtPlayer, pa, -n, ca or pa)
                 if okH and rc == 1 then return true, before, healthOf(a), "the game's own health path" end
             end
         end
