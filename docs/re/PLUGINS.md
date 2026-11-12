@@ -1,4 +1,7 @@
-# Plugins: other mods' special rounds (sv_plugins.lua, API version 1)
+# Plugins: other mods' special rounds (sv_plugins.lua, add-on API 2.0)
+
+For add-on authors: `docs/ADDONS.md` (the API, versions, the rules) and `examples/addons/target_practice/`. This page
+is the loader's and the guard's internals.
 
 UE4SS gives every Lua mod its own Lua state, so another mod can't reach Survival's SPC.kinds from its own main.lua.
 A plugin is a Lua file the other mod installs into `AC8SurvivalMode/plugins/` (Survival's zip has no such folder; its
@@ -14,7 +17,7 @@ in its own Lua state after every part has loaded (sv_plugins.lua is the last ent
 ## SVP (every name 15 characters or fewer, hard rule 25's limit kept for the Lua side too)
 | call | what |
 |---|---|
-| `SVP.version` | 1 |
+| `SVP.version` / `SVP.api` | 2 / `{ major = 2, minor = 0 }` (an add-on's `def.api`: the lowest it needs) |
 | `SVP.register(kind, def)` | `true` or `false, why`. `kind`: letters, digits, `_`, at most 15, not taken. `def.kind`: the SPC.kinds entry (`spawn` needed; `sub`, `alone`, `aircraft`, `budget`, `ready`, `tick`, `busy`, `over`, `row`, `hold`, as Survival's own kinds). `def.cfg`: its settings' defaults, becomes `CFG.specials[kind]` with `[specials.<kind>]` from survival.ini read over it (each value takes its default's type; `enabled = false` switches it off). `def.rotation = true`: joins the rotation, unless the player wrote their own `rotation` (then it's theirs to add). `def.name`, `def.ver`: the log and the leaderboard. |
 | `SVP.target(actor, opts)` | an id: the actor is watched on every tick of the plugin's round; gone or no health = down: `opts.pay` x the round's tier (as the Spaceport's ships; `opts.flat` = as given), a ground stat (`opts.class = "air"`: air), `opts.onDown(id, why)`. |
 | `SVP.untarget(id)` / `SVP.kill(id, why)` / `SVP.alive(id)` | off the watch (no pay) / down now, paid / still up |
@@ -28,7 +31,9 @@ in its own Lua state after every part has loaded (sv_plugins.lua is the last ent
 | `SVP.levelGoing()` | the level is going away: touch nothing |
 | `SVP.callout(text, sub)` / `SVP.say(who, text, secs)` / `SVP.log(msg)` | round callout / subtitle / log |
 | `SVP.isHost()` / `SVP.inCoop()` | version 1: solo only |
-| `SVP.send` / `SVP.on` | version 2 (co-op's channel, host-authoritative kills); stubs now |
+| `SVP.on(event, fn)` | runStart, roundStart, roundEnd, runEnd, levelGoing |
+| `SVP.provide` / `SVP.liveObj` / `SVP.bgm` | API 2: see docs/ADDONS.md |
+| `SVP.net` | co-op's add-on channel: API 2.1 (a stub now) |
 
 ## Safety
 - Every callback of a plugin runs in a pcall: its first error is logged and switches the plugin off for the session

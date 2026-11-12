@@ -43,16 +43,23 @@
 --                               SVP.going(fn) runs fn(now) once as that starts: a plugin's round-over flag;
 --                               `now` = os.clock()). A plugin must never use LoopAsync, ExecuteInGameThread,
 --                               ExecuteWithDelay or RegisterKeyBind itself: they run its Lua off the game thread in
---                               Survival's one Lua state, which crashes the game (HISTORY 0.73.82; our own test of
---                               2026-11-07: a plugin's LoopAsync + ExecuteInGameThread aborted the game at launch)
---   SVP.send, SVP.on            co-op's message channel: version 2 (stubs now: send returns false)
+--                               Survival's one Lua state, which crashes the game (HISTORY 0.73.82; a plugin's
+--                               LoopAsync + ExecuteInGameThread aborted the game at launch in a test)
+--   SVP.net                     co-op's add-on channel (host -> joiners): API 2.1, a stub now (SVP.send: API 1's)
+--   SVP.on(event, fn)           Survival's moments: runStart, roundStart, roundEnd, runEnd, levelGoing (API 2)
+--   SVP.provide(name, fn)       what an add-on's native mod gives the API: "hurtPlayer" (API 2)
+--   SVP.liveObj(o)              o still the engine's live object (ask it for anything kept between ticks; API 2)
+--   SVP.bgm(on)                 Survival's music off / back for an add-on's track, always given back (API 2)
+--   SVP.api                     { major, minor }; an add-on's def.api = "2.0" is the lowest it needs; def.requires
+--                               = native function names it needs; def.check() = its own readiness (API 2)
 --   SVP.sound(path, at)         a Wwise event at a spot; SVP.fx(path, at, scale, rot, floats) a Niagara system (the
 --                               component back); SVP.play2d(path, vol) a sound wave heard by you alone (ok, length s,
 --                               its audio component: :Stop() cuts it short)
 --   SVP.playerPlane()           { a, X, Y, Z, VX, VY, VZ, health, down } of your plane, or nil
 --   SVP.retire(a)               the game kills one of the plugin's units (ModifyHealth): freed as a stock unit is,
 --                               nothing counted or paid for it
---   SVP.hurt(a, n, causer)      (causer nil = no one: a kill by it is counted and paid to no one) n damage (MaxHealth units) to an AI object (ModifyHealth) or your plane (its health
+--   SVP.hurt(a, n, causer)      n damage (MaxHealth units) to an AI object (ModifyHealth; causer nil = no one's kill,
+--                               counted and paid to no one) or your plane (the hurtPlayer provider, else its health
 --                               written; a lethal hit is SVP.killPlayer); SVP.killPlayer(why) the stock sure kill
 -- A kind may also give abort(why): called when the run its round belongs to ends under it (every player down, the
 -- level left); without one, over(now, nil). Its targets are taken off unpaid. Touch no object when why is
@@ -223,7 +230,7 @@ do
     end
 
     -- the game-thread cost of a plugin's work (its tick + the API's sweep, its `every` jobs): a summary in the log every
-    -- 30 s while it runs, worst first (Inveigh, 11-08: no game-thread job over ~5 ms)
+    -- 30 s while it runs, worst first (a game-thread job should stay under ~5 ms)
     local function perf(p, what, ms)
         local P = p.perf or { at = os.clock() }
         p.perf = P
@@ -369,7 +376,7 @@ do
         p.defs[kind] = def.kind                       -- (abort / over for a round whose run ended: runCheck)
         p.kinds[#p.kinds + 1] = kind
         -- the rotation: the plugin's kind joins it unless the player wrote a rotation of their own (survival.ini's
-        -- `rotation` line), which is theirs to change: "excalibur" in it brings the kind, leaving it out keeps it away
+        -- `rotation` line), which is theirs to change: the kind's name in it brings the kind, leaving it out keeps it away
         local rot = CFG.specials.rotation
         local shipped = CFG_DEFAULTS and CFG_DEFAULTS.specials and CFG_DEFAULTS.specials.rotation
         local own = shipped and not sameList(rot, shipped)
@@ -402,16 +409,15 @@ do
     local assetHit, assetMiss = {}, {}               -- (plAsset's, below; SVP.load fills the hits too)
     -- An asset or audio component kept in Lua is NOT kept alive by it: the game's garbage collection frees a sound wave
     -- nothing references, and valid() (UE4SS IsValid) can pass on the freed memory. A kept object is used only while
-    -- liveObj says it is still the engine's live object; else it is looked up again. (Excalibur, 11-09 twice runs at
-    -- 12:4x and 8:33 pm: SpawnSound2D on the round-1 laser-shot wave freed since, AC8 crashed in
-    -- UAudioComponent::PlayInternal reading the "wave"'s vtable: exe+0x3fb7102 both times)
+    -- liveObj says it is still the engine's live object; else it is looked up again. (SpawnSound2D on a wave freed since
+    -- its last play crashed AC8 in UAudioComponent::PlayInternal, reading the "wave"'s vtable: exe+0x3fb7102)
     local function kept(o) return o ~= nil and liveObj(o) end
     function SVP.load(path)
         if type(path) ~= "string" then return nil, "a path" end
         local m = loadMiss[path]
         if m and os.clock() - m < 30 then return nil, "not found (kept 30 s)" end   -- (a miss isn't loaded again at once)
         local h = assetHit[path]
-        if h and kept(h) then return h end               -- (test 20: StaticFindObject by path costs 12-37 ms too: kept)
+        if h and kept(h) then return h end               -- (StaticFindObject by path costs 12-37 ms too: kept)
         local okF, f = pcall(StaticFindObject, path)     -- (already in memory: found, not loaded again)
         if okF and valid(f) then assetHit[path] = f; return f end
         local o, why = loadObject(path)
@@ -533,8 +539,8 @@ do
         if not okR then log("plugins: run check error " .. tostring(errR)) end
         local okE, errE = pcall(eventsTick, now)
         if not okE then log("plugins: events error " .. tostring(errE)) end
-        -- (the round-over rule, 11-09: nothing of a plugin's reads a game object while the level is being torn down:
-        -- the Excalibur port's four crashes of that kind. Survival's teardown flag is levelGoing; every job waits it out)
+        -- (nothing of a plugin's reads a game object while the level is being torn down: reads then crashed the game.
+        -- Survival's teardown flag is levelGoing; every job waits it out)
         if levelGoing and levelGoing() then
             if not PLUGINS.wentGoing then                  -- (once, the first tick of it: SVP.going's jobs, no game object)
                 PLUGINS.wentGoing = true
@@ -597,7 +603,7 @@ do
     -- Sound, effects and the player's plane (version 1, second part). Each is Survival's own way of doing it
     -- (sv_escort_laser.lua's sound / fx, sv_decoy.lua's sure kill), so a plugin needs no UE calls of its own for them.
     -- (an asset a plugin plays: found ones kept while valid, a miss kept 30 s, so a sound missing from the pack isn't
-    -- looked up and loaded again on every play: 15-46 ms each, the Excalibur round's radio / laser, 11-09)
+    -- looked up and loaded again on every play: 15-46 ms each)
     local function fullPath(path)
         return path:find(".", 1, true) and path or (path .. "." .. path:match("[^/]+$"))
     end
@@ -609,7 +615,7 @@ do
         if h and kept(h) then plWhy = "kept"; return h end
         local m = assetMiss[full]
         if m and os.clock() - m < 30 then plWhy = "miss kept"; return nil end
-        -- (Survival test 14: LoadObject took 14-20 ms even for a wave already in memory: an asset that's loaded is
+        -- (LoadObject takes 14-20 ms even for a wave already in memory: an asset that's loaded is
         -- found first (StaticFindObject, well under 1 ms), so a plugin can load its assets ahead and play them cheaply)
         local okF, f = pcall(StaticFindObject, full)
         if okF and valid(f) then assetHit[full], assetMiss[full] = f, nil; plWhy = "found"; return f end
@@ -655,11 +661,11 @@ do
         return ok and comp or nil
     end
     -- a sound wave (or cue) heard by you alone, not placed (GameplayStatics.SpawnSound2D): true and its length in s
-    -- (SVP.p2dMs: the last play's parts in ms, asset / statics / pc / spawn / duration: the Excalibur round's lines
-    -- cost 16-37 ms each to start even when the wave is in memory, 11-09; which part)
+    -- (SVP.p2dMs: the last play's parts in ms, asset / statics / pc / spawn / duration: a line can cost 16-37 ms to
+    -- start even when the wave is in memory; which part)
     local gsObj
-    -- (11-10, the voice-line stutter: every line start spent 20-38 ms in plAsset, loaded ahead or not (Excalibur's
-    -- 7:08 am run): a wave that has been played holds no reference once its spawned component is gone, so the next
+    -- (radio lines stuttered: every line start spent 20-38 ms in plAsset, loaded ahead or not: a wave that has been
+    -- played holds no reference once its spawned component is gone, so the next
     -- play finds / loads it again. A HELD audio component (CreateSound2D, not playing, never auto-destroyed) keeps the
     -- wave alive and plays it with no spawn: SVP.hold2d(path) makes one; play2d uses it when it isn't already playing.
     -- Held components belong to the level: gone with it, made again on the next hold2d)
@@ -743,8 +749,8 @@ do
     -- true, health before, after, how
     -- SVP.retire(a): the game itself retires one of the plugin's units (its own death, ModifyHealth), so it's freed as a
     -- stock unit is; Survival counts and pays nothing for it (no kill, no credits, no stats: PLUGINS.retired, the plane
-    -- sweep skips it). For the Excalibur round's units after the sink (rule 24, the manager 11-09): a unit the game still
-    -- has registered can't be spawned again by name, and taking it off the phase by hand crashed later (tests 12 / 20)
+    -- sweep skips it). For an add-on's units at its round's end: a unit the game still has registered can't be spawned
+    -- again by name (hard rule 16), and taking it off the phase by hand crashed the game later
     PLUGINS.retired = {}
     function SVP.retire(a)
         if SVP.levelGoing() or not valid(a) then return false end
@@ -761,8 +767,8 @@ do
         if before and before <= 0 then return false, before, before, "dead (left alone)" end
         local isMe = a == myPawn() or (addrOf and myPawn() and addrOf(a) == addrOf(myPawn()))
         if not isMe then
-            -- (11-09, in-game e461643: a plugin's hit with NO causer is no one's: if it kills, Survival counts and pays
-            -- nothing for it, as SVP.retire (the Excalibur reflector web hitting NPC aircraft))
+            -- (a plugin's hit with NO causer is no one's: if it kills, Survival counts and pays nothing for it, as
+            -- SVP.retire: e.g. an add-on's weapon hitting enemy aircraft)
             local k = (causer == nil) and addrOf and addrOf(a)
             if k and before and before - n <= 0 then PLUGINS.retired[k] = true end
             local ok = pcall(function() a:ModifyHealth(-n, causer, true) end)
