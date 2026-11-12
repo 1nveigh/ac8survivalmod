@@ -90,8 +90,10 @@ touch no game object in them. `SVP.every(fn)`: `fn(now)` every Survival tick (25
 - Never call `LoopAsync`, `ExecuteInGameThread`, `ExecuteWithDelay` or `RegisterKeyBind`: they run your Lua off the game
   thread in Survival's one Lua state, which crashes the game. Use `SVP.every`.
 - A Lua reference doesn't keep a game object alive. An actor, asset or component you keep between ticks can be freed
-  by the game's garbage collection, and UE4SS's `IsValid` can still say yes on freed memory: check `SVP.liveObj(o)`
-  first, and look it up again when it says no.
+  by the game's garbage collection, and UE4SS's `IsValid` can still say yes on freed memory. `SVP.liveObj(o)` says
+  whether the address is a live object, but not whether it's still YOURS: the allocator can put a new object where a
+  freed one was. So keep the path, not the asset: `SVP.load(path)` / `SVP.play2d(path)` each time (they're cached and
+  check both, cheaply). For an actor you spawned, check `SVP.liveObj` and that it's the one you made (its full name).
 - Touch no game object while `SVP.levelGoing()` is true.
 - Native Lua function names (a C++ mod's) are 15 characters or fewer.
 - Keep a callback short: a tick over 100 ms three times running is logged; over 2 s in one call switches the add-on off.

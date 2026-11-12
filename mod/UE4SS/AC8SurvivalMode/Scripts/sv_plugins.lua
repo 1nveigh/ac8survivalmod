@@ -415,6 +415,27 @@ do
     -- liveObj says it is still the engine's live object; else it is looked up again. (SpawnSound2D on a wave freed since
     -- its last play crashed AC8 in UAudioComponent::PlayInternal, reading the "wave"'s vtable: exe+0x3fb7102)
     local function kept(o) return o ~= nil and liveObj(o) end
+    -- liveObj alone isn't enough either: once the GC has freed an object, the allocator can put a NEW object at the same
+    -- address, which takes a live GUObjectArray slot, so the old pointer passes liveObj while it is another object now
+    -- (SVP.load handed back a freed asset 5 s after a good load in a test). A kept object is used only if
+    -- it is still live AND still the same object: its full name when it was kept (keep) matches (kept).
+    local keptId = setmetatable({}, { __mode = "k" })
+    local function idOf(o)
+        local ok, n = pcall(function() return o:GetFullName() end)
+        return ok and type(n) == "string" and n ~= "" and n or nil
+    end
+    local function keep(o)
+        if o ~= nil then keptId[o] = idOf(o) end
+        return o
+    end
+    do
+        local alive = kept
+        kept = function(o)                               -- (liveObj first: GetFullName walks the outer chain)
+            if not alive(o) then return false end
+            local id = keptId[o]
+            return id ~= nil and idOf(o) == id
+        end
+    end
     function SVP.load(path)
         if type(path) ~= "string" then return nil, "a path" end
         local m = loadMiss[path]
@@ -422,9 +443,9 @@ do
         local h = assetHit[path]
         if h and kept(h) then return h end               -- (StaticFindObject by path costs 12-37 ms too: kept)
         local okF, f = pcall(StaticFindObject, path)     -- (already in memory: found, not loaded again)
-        if okF and valid(f) then assetHit[path] = f; return f end
+        if okF and valid(f) then assetHit[path] = keep(f); return f end
         local o, why = loadObject(path)
-        if o == nil then loadMiss[path] = os.clock() else loadMiss[path] = nil; assetHit[path] = o end   -- (play2d / sound / fx find it)
+        if o == nil then loadMiss[path] = os.clock() else loadMiss[path] = nil; assetHit[path] = keep(o) end   -- (play2d / sound / fx find it)
         return o, why
     end
     local function xform(at, yaw)
@@ -621,9 +642,9 @@ do
         -- (LoadObject takes 14-20 ms even for a wave already in memory: an asset that's loaded is
         -- found first (StaticFindObject, well under 1 ms), so a plugin can load its assets ahead and play them cheaply)
         local okF, f = pcall(StaticFindObject, full)
-        if okF and valid(f) then assetHit[full], assetMiss[full] = f, nil; plWhy = "found"; return f end
+        if okF and valid(f) then assetHit[full], assetMiss[full] = keep(f), nil; plWhy = "found"; return f end
         local o = loadObject(full)
-        if valid(o) then assetHit[full], assetMiss[full] = o, nil; plWhy = "loaded"; return o end
+        if valid(o) then assetHit[full], assetMiss[full] = keep(o), nil; plWhy = "loaded"; return o end
         assetHit[full], assetMiss[full] = nil, os.clock()
         plWhy = "miss"
         return nil
@@ -684,7 +705,7 @@ do
         if not (sw and valid(gsObj) and liveObj(survivalPC)) then return nil, "not loaded" end
         local ok, comp = pcall(function() return gsObj:CreateSound2D(survivalPC, sw, 1.0, 1.0, 0.0, nil, false, false) end)
         if not (ok and valid(comp)) then return nil, "CreateSound2D: " .. tostring(comp) end
-        held2d[full] = comp
+        held2d[full] = keep(comp)
         return comp
     end
     function SVP.play2d(path, volume)

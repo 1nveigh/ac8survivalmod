@@ -124,6 +124,25 @@ D.round = 2; PLUGINS.tick()
 D = nil; PLUGINS.tick()
 check(table.concat(EV, " ") == "runStart roundStart:1 roundEnd:1 roundStart:2 roundEnd:2 runEnd:2", "run / round events in order")
 
+print("a freed object's address taken by another")
+-- (the GC frees a cached asset and the allocator puts a new object at its address: the old pointer is "live" again,
+-- but another object. The cache must look again, never hand it back)
+do
+    local made = 0
+    local realLoad = loadObject
+    loadObject = function(p)
+        made = made + 1
+        return setmetatable({ path = p, live = true, n = made },
+            { __index = { GetFullName = function(self) return self.fullname or ("Object " .. p) end } })
+    end
+    local a1 = SVP.load("/Game/X/MI_A.MI_A")
+    local a2 = SVP.load("/Game/X/MI_A.MI_A")
+    a1.fullname = "SoundWave /Game/Y/SW_B.SW_B"            -- (its memory is another object now, still a live one)
+    local a3 = SVP.load("/Game/X/MI_A.MI_A")
+    check(a1 == a2 and a3 ~= a1 and made == 2, "SVP.load: kept while it's the same object, looked up again once it isn't")
+    loadObject = realLoad
+end
+
 print("isolation")
 local kb = SPC.kinds.badk
 kb.spawn(1); kb.tick(2, {})
