@@ -1,4 +1,4 @@
-# Add-on sorties for AC8 Survival Mode (add-on API 2.0)
+# Add-on sorties for AC8 Survival Mode (add-on API 2.1)
 
 An add-on adds a special round of its own to Survival: its units, its targets and pay, its callouts, radio and music.
 It runs inside Survival's Lua state, through the API Survival gives it (`SVP`). Survival needs nothing from the add-on
@@ -33,7 +33,8 @@ SVP.register("practice", {                    -- the kind: letters, digits, _, 1
 ```
 
 ## Versions
-- `SVP.api` = `{ major = 2, minor = 0 }`. A minor version only adds calls; a major one may change them.
+- `SVP.api` = `{ major = 2, minor = 1 }`. A minor version only adds calls; a major one may change them (2.1 added
+  co-op, below; a 2.0 add-on is served unchanged).
 - `def.api = "2.0"`: the lowest version your add-on needs. Survival refuses an add-on it can't serve (a newer major, or a
   newer minor of its own major) and says so in one log line:
   `plugin <name>: not loaded: it needs add-on API 3.0; this Survival has 2.0`. An add-on with no `def.api` is taken
@@ -73,7 +74,7 @@ touch no game object in them. `SVP.every(fn)`: `fn(now)` every Survival tick (25
 | `SVP.hurt(a, n, causer)` | `n` damage (MaxHealth units). `causer` nil = no one's kill: counted and paid to no one |
 | `SVP.killPlayer(why)` | the player's plane destroyed (Survival's own sure kill) |
 | `SVP.playerPlane()` | `{ a, X, Y, Z, VX, VY, VZ, health, down }` or nil |
-| `SVP.players()` | `{ { slot, X, Y, Z } }` |
+| `SVP.players()` | `{ { slot, X, Y, Z } }`: you; on a co-op host every player (2.1) |
 | `SVP.pad()` / `SVP.runway()` | the spaceport's shuttle pad / Comona Airport's runway, cm |
 | `SVP.clock()` / `SVP.round()` / `SVP.run()` | the rounds' clock / the round / a token of the run in progress |
 | `SVP.levelGoing()` | the level is being torn down: touch nothing |
@@ -84,8 +85,8 @@ touch no game object in them. `SVP.every(fn)`: `fn(now)` every Survival tick (25
 | `SVP.hud(on, why)` | Survival's own HUD (its panel, the callout banner, the subtitle strip) off (`false`) for your cutscene, or back (`true`); `why` goes in the log. Callouts and subtitle lines said meanwhile wait and show after, in order. The API gives it back by itself at your round's end, your run's end, the level going, your add-on switched off, or 60 s after you hid it. The game's own HUD isn't touched (a stock cutscene hides it itself) |
 | `SVP.liveObj(o)` | `o` is still the engine's live object. Ask it before using anything kept between ticks |
 | `SVP.provide(name, fn)` | give the API what your native mod has: `"hurtPlayer"` = `fn(playerAddress, -healthPoints, causerAddress)` -> 1 (the player's damage through the game's own health path). Survival's own function wins when it has one |
-| `SVP.isHost()` / `SVP.inCoop()` | co-op state |
-| `SVP.net` | co-op's add-on channel: API 2.1 (a stub in 2.0: `SVP.net.ready` false) |
+| `SVP.isHost()` / `SVP.inCoop()` | not a co-op joiner (solo is a host) / co-op open |
+| `SVP.net` | co-op's add-on channel (2.1; `SVP.net.ready` true): below |
 
 ## Rules (each one learned from a crash)
 - Never call `LoopAsync`, `ExecuteInGameThread`, `ExecuteWithDelay` or `RegisterKeyBind`: they run your Lua off the game
@@ -109,13 +110,42 @@ touch no game object in them. `SVP.every(fn)`: `fn(now)` every Survival tick (25
 - A `check`, `ready` or `spawn` that says no: Survival plays its normal round.
 - A run with any add-on loaded isn't ranked on the leaderboard (`LB.edited` lists it).
 
-## Co-op
-API 2.0 is single player: an add-on's round never comes in co-op unless the add-on says it can (`def.coop = true`,
-API 2.1, with its joiner side). Planned for 2.1: `SVP.net.send(event, ...)` from the host to every joiner on Survival's
-channel, `def.remote` (the joiner's start / tick / over and its message handlers), and a check that every player has
-the same add-ons and versions before an add-on's round comes.
+## Co-op (API 2.1)
+Survival's co-op is the host's: its rounds, kills and pay; the joiners' games mirror them. An add-on's round follows
+the same rule.
+- Opt in with both `def.coop = true` and `def.remote` (the joiner's side). Without them the kind is single player, as
+  in 2.0: its round never comes while co-op is open (one log line a run).
+- The round comes only when every player in the room has the same add-on kind at the same `def.ver`. Each game with
+  API 2.1 tells the host its co-op kinds as it links; a player who hasn't (no add-on, an older Survival, a stock one)
+  keeps the round away, and the host's log says who and why:
+  `plugin <name>: its round skipped in co-op: player 3 (NAME) has version 0.4, this game 0.5`.
+- The host runs the kind's callbacks as in solo. When its round starts, ends or is aborted, each joiner that has it
+  is told, and its `def.remote` runs there:
+  - `start(now, round)`, `tick(now)` (every tick while the host's round is on), `over(now, result)`, `abort(why)`.
+  - The joiner's round is also aborted if the host's goes quiet (15 s with no word), its own run or level ends, or the
+    room changes hands. Music and HUD taken there (`SVP.bgm`, `SVP.hud`) are given back as in solo.
+- `def.joined(slot, has)` (optional, the host): a player came during your round; `has` = they have it (their round
+  has been started). Send them what they need to catch up with `SVP.net.sendTo`.
+- Host only (refused on a joiner, one line): `SVP.target`, `SVP.untarget`'s targets, `SVP.kill`, `SVP.pay`. Pay on
+  the host goes through Survival's co-op pay, so every player gets their share as for Survival's own specials.
+  Everything else is local to each game: spawns and despawns, sounds, effects, callouts, music, `SVP.playerPlane`, and
+  `SVP.hurt` / `SVP.retire` of that game's own actors (a joiner's local copies of your units).
+- `SVP.net` (your add-on's channel, on Survival's own co-op link):
+  - `SVP.net.send(event, ...)`: the host's goes to every joiner, a joiner's to the host. `SVP.net.sendTo(slot, event,
+    ...)`: the host to one player. Fields: numbers, booleans (as "1" / "0"), strings of 200 bytes at most; `|` becomes
+    `/`. A message is 400 bytes at most, 20 a second for each add-on; over: refused (false and why), never cut short.
+  - `SVP.net.on(event, fn)`: `fn(fromSlot, ...)`, its fields as strings. A joiner hears only the host. Guarded as
+    every callback.
+  - `SVP.net.peers()`: `{ { slot, name, same } }`, the other players and whether each has your add-on's kinds at your
+    version (a joiner sees the host). `SVP.net.slot()`: this game's slot.
+- Damage to a joiner: the host decides it (it has every player's plane, `SVP.players`) and sends it; the joiner hurts
+  its own plane (`SVP.hurt(SVP.playerPlane().a, n)`), so each player's death stays their game's own.
+- A friend's game without the API drops the add-on's messages (Survival's dispatch ignores a tag it doesn't know) and
+  plays plain Survival; the host's add-on rounds stay away while they're in the room.
 
 ## Log lines to look for
 `plugin <name>: kind <kind> registered (...)`, `plugin <name>: loaded (...)`, `plugin <name>: not loaded: ...`,
-`plugin <name>: its round skipped: <why>`, `plugin <name>: <callback> error ...: the add-on is switched off for this
+`plugin <name>: its round skipped: <why>`, `plugin <name>: its round skipped in co-op: <why>`,
+`plugins: co-op: player N (NAME) has add-on API 2.1, co-op add-ons: ...`, `plugins: co-op: the host has add-on API ...`,
+`plugin <name>: the host's <kind> round <n> here`, `plugin <name>: <callback> error ...: the add-on is switched off for this
 session`, `plugin <name>: Survival's music given back (...)`, `plugins: none (...)`.
