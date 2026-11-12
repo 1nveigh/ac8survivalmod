@@ -321,7 +321,10 @@ local function planeSweep(slot)
                 goneWithLevel(p, LEAVE.why)
             else
                 p.down = true
-                if dead then
+                local ret = PLUGINS and PLUGINS.retired and PLUGINS.retired[p.addr or addrOf(p.obj) or 0]
+                if ret then                                                    -- (a plugin's unit the game was made to
+                    PLUGINS.retiredSeen = (PLUGINS.retiredSeen or 0) + 1       -- retire, SVP.retire: no kill, no pay)
+                elseif dead then
                     pcall(KILL.read, p)                                        -- (the last hits: it's still there)
                     downCounted(p, you, D and D.now)
                 elseif D then                                                  -- (gone without its death seen: held)
@@ -1009,6 +1012,7 @@ local function tickJob()
         local t1 = os.clock()
         local okB, errB = pcall(probeTickB, tick)
         if not okB then log("round probe: error (second half) " .. tostring(errB)) end
+        if PLUGINS and PLUGINS.tick then PLUGINS.tick() end   -- (plugins' SVP.every: sv_plugins.lua; guarded there)
         if tick % 4 == 3 then timed("speakers", ALLY.speakerTick, D ~= nil) end   -- the run's ally speakers, on and off
         if tick % 4 == 1 then timed("leaderboard", LB.poll) end                  -- the leaderboard sends' answers
         if tick % 20 == 7 then timed("leaderboard", LB.queueTick) end            -- runs waiting to be sent
