@@ -53,6 +53,8 @@
 --   SVP.provide(name, fn)       what an add-on's native mod gives the API: "hurtPlayer" (API 2)
 --   SVP.liveObj(o)              o still the engine's live object (ask it for anything kept between ticks; API 2)
 --   SVP.bgm(on)                 Survival's music off / back for an add-on's track, always given back (API 2)
+--   SVP.hud(on, why)            Survival's own HUD (its panel, callouts, subtitle strip) hidden / back for an add-on's
+--                               cutscene; callouts and lines held, not lost; always given back (API 2)
 --   SVP.api                     { major, minor }; an add-on's def.api = "2.0" is the lowest it needs; def.requires
 --                               = native function names it needs; def.check() = its own readiness (API 2)
 --   SVP.sound(path, at)         a Wwise event at a spot; SVP.fx(path, at, scale, rot, floats) a Niagara system (the
@@ -104,6 +106,49 @@ do
     end
     PLUGINS.bgmBack = bgmBack
 
+    -- Survival's own HUD hidden for an add-on's cutscene (SVP.hud), and ALWAYS given back: at its round's end, its run's
+    -- end, the level going, the add-on switched off, or HUD_MAX_S after it was hidden. Hidden through Survival's own
+    -- pause path (sv_hud.lua hudTick's `paused`: the panel, the callout banner and the subtitle strip off; the strip's
+    -- queue waits, as for a pause); callouts said meanwhile are held here and shown after, in order (4 at most, as
+    -- Survival's own queue). Nothing of Survival's files is changed for it: hudTick is wrapped (sv_main.lua calls it by
+    -- name every tick). Callouts held when the level goes are dropped with the level.
+    local HUD_MAX_S = 60
+    PLUGINS.calloutsHeld = {}
+    local function hudHeld()
+        for _, p in ipairs(PLUGINS.loaded or {}) do if p.hudHidden and not p.off then return true end end
+        return false
+    end
+    PLUGINS.hudHeld = hudHeld
+    local function hudBack(p, why)
+        if not (p and p.hudHidden) then return end
+        p.hudHidden = nil
+        plog(p, "Survival's HUD given back (" .. tostring(why) .. ")")
+    end
+    PLUGINS.hudBack = hudBack
+    local function wrapHud()
+        if PLUGINS.hudWrapped or type(hudTick) ~= "function" then return end
+        local orig = hudTick
+        hudTick = function(now, paused, pc)
+            local held = hudHeld()
+            local q = type(callouts) == "table" and callouts or nil
+            if q then
+                if held then                                  -- (said while it's hidden: kept for after)
+                    while #q > 0 do
+                        local c = table.remove(q, 1)
+                        if #PLUGINS.calloutsHeld < 4 then PLUGINS.calloutsHeld[#PLUGINS.calloutsHeld + 1] = c end
+                    end
+                elseif #PLUGINS.calloutsHeld > 0 then         -- (back: the held ones first, then any new)
+                    for i = #PLUGINS.calloutsHeld, 1, -1 do table.insert(q, 1, PLUGINS.calloutsHeld[i]) end
+                    while #q > 4 do table.remove(q) end
+                    PLUGINS.calloutsHeld = {}
+                end
+            end
+            return orig(now, paused or held, pc)
+        end
+        PLUGINS.hudWrapped = true
+    end
+    PLUGINS.wrapHud = wrapHud
+
     -- an add-on switched off for the session: its round ends as soon as Survival's checks allow (busy false), its
     -- targets come off unpaid, Survival's music is given back
     function PLUGINS.switchOff(p, why)
@@ -113,6 +158,7 @@ do
         crumb("plugin " .. tostring(p.name) .. " off")
         for id, t in pairs(PLUGINS.targets) do if t.p == p then PLUGINS.targets[id] = nil end end
         bgmBack(p, "switched off")
+        hudBack(p, "switched off")
     end
 
     -- a plugin's callback, guarded: its first error switches the plugin off
@@ -314,6 +360,7 @@ do
             p.liveRun = nil
             local r = table.pack(over and over(now, s))
             bgmBack(p, "its round is over")
+            hudBack(p, "its round is over")
             return table.unpack(r, 1, r.n)
         end
         return e
@@ -330,6 +377,7 @@ do
                 for id, t in pairs(PLUGINS.targets) do if t.p == p then PLUGINS.targets[id] = nil end end
                 plog(p, "its round's run ended (" .. why .. "): round taken off")
                 bgmBack(p, "its run ended")
+                hudBack(p, "its run ended")
                 for _, k in ipairs(p.kinds) do
                     local def = p.defs and p.defs[k]
                     if def and type(def.abort) == "function" then guard(p, "abort", def.abort)(why)
@@ -581,11 +629,16 @@ do
             if not PLUGINS.wentGoing then                  -- (once, the first tick of it: SVP.going's jobs, no game object)
                 PLUGINS.wentGoing = true
                 for _, e in ipairs(PLUGINS.going) do if not e.p.off then e.fn(now) end end
-                for _, p in ipairs(PLUGINS.loaded) do bgmBack(p, "the level is going") end
+                for _, p in ipairs(PLUGINS.loaded) do bgmBack(p, "the level is going"); hudBack(p, "the level is going") end
+                PLUGINS.calloutsHeld = {}
             end
             return
         end
         PLUGINS.wentGoing = false
+        wrapHud()
+        for _, p in ipairs(PLUGINS.loaded) do
+            if p.hudHidden and now - p.hudHidden.at > HUD_MAX_S then hudBack(p, HUD_MAX_S .. " s, the API's limit") end
+        end
         for _, e in ipairs(PLUGINS.every) do
             if not e.p.off then
                 local t0 = os.clock()
@@ -635,6 +688,21 @@ do
         if ok and type(r) == "number" and r > 0 then p.bgmMuted = true; return true end
         return false
     end
+
+    -- Survival's own HUD off (false) for an add-on's cutscene, or back (true); why: a word for the log. Given back by the
+    -- API in any case at the add-on's round's end, its run's end, the level going, the add-on switched off, or 60 s on.
+    -- While any add-on holds it, it's hidden; true: this add-on's hold let go
+    function SVP.hud(on, why)
+        local p = PLUGINS.current or PLUGINS.running
+        if not p then return false end
+        wrapHud()
+        if on then hudBack(p, why or "the add-on's call"); return true end
+        if not PLUGINS.hudWrapped then return false end
+        if not p.hudHidden then plog(p, "Survival's HUD hidden (" .. tostring(why or "the add-on's call") .. ")") end
+        p.hudHidden = { at = os.clock(), why = why }
+        return true
+    end
+    wrapHud()
 
     -- Sound, effects and the player's plane (version 1, second part). Each is Survival's own way of doing it
     -- (sv_escort_laser.lua's sound / fx, sv_decoy.lua's sure kill), so a plugin needs no UE calls of its own for them.

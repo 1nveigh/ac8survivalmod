@@ -81,6 +81,7 @@ touch no game object in them. `SVP.every(fn)`: `fn(now)` every Survival tick (25
 | `SVP.play2d(path, vol)` / `SVP.hold2d(path)` | a 2D sound for you alone (ok, length, its audio component) / one held ready, played with no lookup |
 | `SVP.sound(path, at)` / `SVP.fx(path, at, scale, rot, floats)` | a Wwise event at a spot / a Niagara system (its component) |
 | `SVP.bgm(on)` | Survival's music off (`false`) for your own track, or back (`true`). The API gives it back by itself at your round's end, your run's end, the level going, or your add-on switched off |
+| `SVP.hud(on, why)` | Survival's own HUD (its panel, the callout banner, the subtitle strip) off (`false`) for your cutscene, or back (`true`); `why` goes in the log. Callouts and subtitle lines said meanwhile wait and show after, in order. The API gives it back by itself at your round's end, your run's end, the level going, your add-on switched off, or 60 s after you hid it. The game's own HUD isn't touched (a stock cutscene hides it itself) |
 | `SVP.liveObj(o)` | `o` is still the engine's live object. Ask it before using anything kept between ticks |
 | `SVP.provide(name, fn)` | give the API what your native mod has: `"hurtPlayer"` = `fn(playerAddress, -healthPoints, causerAddress)` -> 1 (the player's damage through the game's own health path). Survival's own function wins when it has one |
 | `SVP.isHost()` / `SVP.inCoop()` | co-op state |
