@@ -96,12 +96,13 @@ touch no game object in them. `SVP.every(fn)`: `fn(now)` every Survival tick (25
   check both, cheaply). For an actor you spawned, check `SVP.liveObj` and that it's the one you made (its full name).
 - Touch no game object while `SVP.levelGoing()` is true.
 - Native Lua function names (a C++ mod's) are 15 characters or fewer.
-- Keep a callback short: a tick over 100 ms three times running is logged; over 2 s in one call switches the add-on off.
+- Keep a callback short: a tick over 100 ms three times running is logged; a call over 2 s is logged as a hitch, and
+  three of them within 60 s switch the add-on off (a stall).
 
 ## What Survival does to keep itself safe
 - Each add-on file loads in a pcall: an error at load takes its kinds off again. A version it can't serve, or a
   missing `requires`, is refused with one line.
-- Every callback runs guarded: the first error (or a stall, above) switches the add-on off for the session. Its round
+- Every callback runs guarded: the first error (or a stall: three calls over 2 s within 60 s) switches the add-on off for the session. Its round
   ends as soon as Survival's checks allow (`busy` false), its targets come off the watch unpaid, Survival's music is
   given back.
 - A `check`, `ready` or `spawn` that says no: Survival plays its normal round.

@@ -151,8 +151,11 @@ local ks = SPC.kinds.slowk
 ks.spawn(1)
 check(bgm[#bgm] == "AKE_System_BGM_Mute_On", "SVP.bgm(false) mutes Survival's music")
 ks.tick(2, {})
+check(ks.ready(9, false) == true and said("a hitch") and bgm[#bgm] == "AKE_System_BGM_Mute_On",
+    "one call over 2 s is a hitch: logged, the add-on stays on")
+ks.tick(3, {}); ks.tick(4, {})
 check(ks.ready(9, false) == false and said("a stall") and bgm[#bgm] == "AKE_System_BGM_Mute_Off",
-    "a call over 2 s switches the add-on off and gives Survival's music back")
+    "three calls over 2 s within 60 s switch the add-on off and give Survival's music back")
 
 print(fails == 0 and "plugins_test: all passed" or ("plugins_test: " .. fails .. " FAILED"))
 os.exit(fails == 0 and 0 or 1)

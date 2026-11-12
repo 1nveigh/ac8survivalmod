@@ -83,9 +83,12 @@ do
 
     local function plog(p, msg) log("plugin " .. tostring(p and p.name or "?") .. ": " .. tostring(msg)) end
 
-    -- One add-on can't stall Survival: a callback over STALL_OFF_MS in one call switches it off as an error does;
-    -- STALL_WARN_MS three times in a row is said once
-    local STALL_WARN_MS, STALL_OFF_MS = 100, 2000
+    -- One add-on can't stall Survival: a callback over STALL_OFF_MS is logged, and STALL_OFF_N of them within
+    -- STALL_WINDOW_S seconds switch the add-on off as an error does (a sustained stall). One long call alone is a hitch,
+    -- not a stall: switching a round off mid-fight for it is worse than the hitch (a heavy round's fight start took
+    -- 2.4 s once, under a GPU render: one call, then normal ticks). STALL_WARN_MS three times in a row is said once.
+    -- (A call that never returns can't be caught by any timer: the rules in docs/ADDONS.md are the guard for that)
+    local STALL_WARN_MS, STALL_OFF_MS, STALL_OFF_N, STALL_WINDOW_S = 100, 2000, 3, 60
 
     -- Survival's music muted for an add-on's own track (SVP.bgm), and ALWAYS given back: at its round's end, its run's
     -- end, the level going, or the add-on switched off. SV_PlayBGM is refused while a level is torn down: Survival's
@@ -124,8 +127,17 @@ do
             local ms = (os.clock() - t0) * 1000
             PLUGINS.running = prev
             if res[1] and ms > STALL_OFF_MS then
-                PLUGINS.switchOff(p, string.format("%s took %.0f ms (a stall: over %d ms in one call)", what, ms, STALL_OFF_MS))
-                return fallback
+                local now, kept = os.clock(), {}
+                for _, t in ipairs(p.stalls or {}) do if now - t < STALL_WINDOW_S then kept[#kept + 1] = t end end
+                kept[#kept + 1] = now
+                p.stalls = kept
+                if #kept >= STALL_OFF_N then
+                    PLUGINS.switchOff(p, string.format("%s took %.0f ms, the %d%s call over %d ms within %d s (a stall)",
+                        what, ms, #kept, #kept == 3 and "rd" or "th", STALL_OFF_MS, STALL_WINDOW_S))
+                    return fallback
+                end
+                plog(p, string.format("%s took %.0f ms (over %d ms: a hitch; %d of %d within %d s switch the add-on off)",
+                    what, ms, STALL_OFF_MS, #kept, STALL_OFF_N, STALL_WINDOW_S))
             end
             if res[1] and ms > STALL_WARN_MS then
                 p.slow = (p.slow or 0) + 1
