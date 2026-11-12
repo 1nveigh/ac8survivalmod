@@ -1,4 +1,7 @@
 -- sv_plugins.lua: other mods' special rounds (plugins), the API they're given (SVP) and their loader.
+-- add-on API 2.0
+-- (the line above: the API's version for a native mod to read from this file before Lua runs; kept equal to API below
+-- by tools/checks/plugins_test.lua. Its form stays "-- add-on API <major>.<minor>" on line 2)
 -- Part of AC8 Survival Mode's runtime, run by main.lua last (after sv_main): a name another part uses is a global of
 -- this mod's Lua state, its own helpers stay local (tools/lua_split.py).
 --

@@ -38,6 +38,8 @@ SVP.register("practice", {                    -- the kind: letters, digits, _, 1
   newer minor of its own major) and says so in one log line:
   `plugin <name>: not loaded: it needs add-on API 3.0; this Survival has 2.0`. An add-on with no `def.api` is taken
   as an API 1 add-on, and served.
+- For a native mod, before Lua runs: line 2 of `Mods/AC8SurvivalMode/Scripts/sv_plugins.lua` is
+  `-- add-on API <major>.<minor>` (no such line, or no file: no add-on framework).
 - `def.requires = { "SV_Something", ... }`: native functions it needs (Survival's runtime's, or its own native mod's).
   One missing: not loaded, one line.
 

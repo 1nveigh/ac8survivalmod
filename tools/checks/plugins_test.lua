@@ -85,6 +85,9 @@ for _, f in ipairs(files) do if f.path:find(tmp, 1, true) then os.remove(f.path)
 
 print("versions and requirements")
 check(SVP.api.major == 2 and SVP.api.minor >= 0, "SVP.api is 2.x")
+local l2 = select(2, readAll(MOD .. "/Scripts/sv_plugins.lua"):match("^([^\n]*)\n([^\r\n]*)"))
+check(l2 == string.format("-- add-on API %d.%d", SVP.api.major, SVP.api.minor),
+    "line 2 of sv_plugins.lua (what a native mod reads) is the API's version: " .. tostring(l2))
 check(NEWER[1] == false and SPC.kinds.newerk == nil and said("Newer: not loaded: it needs add-on API 3.0"),
     "an add-on needing a newer API: refused, one line")
 check(REQ[1] == false and said("requires SV_NoSuchThing"), "an add-on missing a native function it requires: refused")
