@@ -77,7 +77,7 @@ function IterateGameDirectories()
     for _, f in ipairs(files) do fl[#fl + 1] = { __name = f.name, __absolute_path = f.path } end
     return { Game = { Binaries = { Win64 = { ue4ss = { Mods = { AC8SurvivalMode = { plugins = { __files = fl } } } } } } } }
 end
-SCRIPT_DIR = "C:\\x\\Game\\Binaries\\Win64\\ue4ss\\Mods\\AC8SurvivalMode\\Scripts\\"
+SCRIPT_DIR = "x\\Game\\Binaries\\Win64\\ue4ss\\Mods\\AC8SurvivalMode\\Scripts\\"   -- (no drive letter: paths_check)
 function SLOW_FAKE() fakeClock = fakeClock + 3 end
 
 assert(load(readAll(MOD .. "/Scripts/sv_plugins.lua"), "@sv_plugins.lua"))()
