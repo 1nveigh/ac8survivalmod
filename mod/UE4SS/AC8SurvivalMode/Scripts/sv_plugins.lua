@@ -64,12 +64,43 @@
 PLUGINS = { loaded = {}, kinds = {}, targets = {}, nextId = 0 }
 
 do
-    local API_VERSION = 1
+    -- the add-on API's version: an add-on declares the lowest it needs (def.api = "2.0"); a minor version only adds
+    -- calls, so every add-on of a lower minor (and API 1's, which declared none) keeps working
+    local API = { major = 2, minor = 0 }
     -- Mission 22's shuttle (AA_Obj_01_Ground0_Shuttle_0), x / y / z cm: tools/re/SPECIAL_ROUNDS.md "The shuttle"
     local SHUTTLE_PAD = { X = -1324937.0, Y = 59740.0, Z = 6343.0 }
     local NAME_MAX = 15
 
     local function plog(p, msg) log("plugin " .. tostring(p and p.name or "?") .. ": " .. tostring(msg)) end
+
+    -- One add-on can't stall Survival: a callback over STALL_OFF_MS in one call switches it off as an error does;
+    -- STALL_WARN_MS three times in a row is said once
+    local STALL_WARN_MS, STALL_OFF_MS = 100, 2000
+
+    -- Survival's music muted for an add-on's own track (SVP.bgm), and ALWAYS given back: at its round's end, its run's
+    -- end, the level going, or the add-on switched off. SV_PlayBGM is refused while a level is torn down: Survival's
+    -- own sound tick then posts the unmute in the next level (sv_sound.lua unmuteTick).
+    local function bgmBack(p, why)
+        if not (p and p.bgmMuted) then return end
+        p.bgmMuted = false
+        local ok, r = false, nil
+        if type(SV_PlayBGM) == "function" then ok, r = pcall(SV_PlayBGM, "AKE_System_BGM_Mute_Off") end
+        ok = ok and type(r) == "number" and r > 0
+        if not ok and type(SND) == "table" then SND.unmuteDue, SND.unmuteAt, SND.unmuteTries = true, nil, 0 end
+        plog(p, "Survival's music given back (" .. tostring(why) .. ")" .. (ok and "" or ": left to Survival's sound tick"))
+    end
+    PLUGINS.bgmBack = bgmBack
+
+    -- an add-on switched off for the session: its round ends as soon as Survival's checks allow (busy false), its
+    -- targets come off unpaid, Survival's music is given back
+    function PLUGINS.switchOff(p, why)
+        if p.off then return end
+        p.off = true
+        plog(p, tostring(why) .. ": the add-on is switched off for this session")
+        crumb("plugin " .. tostring(p.name) .. " off")
+        for id, t in pairs(PLUGINS.targets) do if t.p == p then PLUGINS.targets[id] = nil end end
+        bgmBack(p, "switched off")
+    end
 
     -- a plugin's callback, guarded: its first error switches the plugin off
     local function guard(p, what, fn, fallback)
@@ -78,12 +109,22 @@ do
             if p.off then return fallback end
             local prev = PLUGINS.running
             PLUGINS.running = p                     -- (SVP.target from inside a callback: the target is this plugin's)
+            local t0 = os.clock()
             local res = table.pack(pcall(fn, ...))
+            local ms = (os.clock() - t0) * 1000
             PLUGINS.running = prev
+            if res[1] and ms > STALL_OFF_MS then
+                PLUGINS.switchOff(p, string.format("%s took %.0f ms (a stall: over %d ms in one call)", what, ms, STALL_OFF_MS))
+                return fallback
+            end
+            if res[1] and ms > STALL_WARN_MS then
+                p.slow = (p.slow or 0) + 1
+                if p.slow == 3 then plog(p, string.format("%s took %.0f ms, 3 slow calls in a row (over %d ms): the game hitches", what, ms, STALL_WARN_MS)) end
+            elseif res[1] then
+                p.slow = 0
+            end
             if res[1] then return table.unpack(res, 2, res.n) end
-            p.off = true
-            plog(p, what .. " error " .. tostring(res[2]) .. ": the plugin is switched off for this session")
-            crumb("plugin " .. tostring(p.name) .. " off: " .. what)
+            PLUGINS.switchOff(p, what .. " error " .. tostring(res[2]))
             return fallback
         end
     end
@@ -207,8 +248,9 @@ do
 
     -- the SPC.kinds entry Survival runs for a plugin's kind: every callback guarded; tick also watches its targets;
     -- busy is false once the plugin is off, so its round can end
-    local function kindEntry(p, k)
+    local function kindEntry(p, k, check)
         local e = {}
+        check = guard(p, "check", check, false)
         for name, v in pairs(k) do e[name] = guard(p, name, v, nil) end
         local tick, busy, ready, spawn = e.tick, e.busy, e.ready, e.spawn
         e.tick = function(now, s)
@@ -226,6 +268,16 @@ do
         e.ready = function(round, forced)
             if p.off then return false end
             if COOP and COOP.open and p.coop ~= true then return false end      -- (version 1: solo only)
+            if check then
+                -- (the add-on's own readiness: its native mod, its data. No = its round skipped, Survival's normal wave;
+                -- said once a run for each reason)
+                local ok, why = check()
+                if ok ~= true then
+                    local key = tostring(D) .. "|" .. tostring(why)
+                    if p.checkSaid ~= key then p.checkSaid = key; plog(p, "its round skipped: " .. tostring(why or "not ready")) end
+                    return false
+                end
+            end
             if ready then return ready(round, forced) == true end
             return true
         end
@@ -238,7 +290,9 @@ do
         local over = e.over
         e.over = function(now, s)
             p.liveRun = nil
-            if over then return over(now, s) end
+            local r = table.pack(over and over(now, s))
+            bgmBack(p, "its round is over")
+            return table.unpack(r, 1, r.n)
         end
         return e
     end
@@ -253,6 +307,7 @@ do
                 p.liveRun = nil
                 for id, t in pairs(PLUGINS.targets) do if t.p == p then PLUGINS.targets[id] = nil end end
                 plog(p, "its round's run ended (" .. why .. "): round taken off")
+                bgmBack(p, "its run ended")
                 for _, k in ipairs(p.kinds) do
                     local def = p.defs and p.defs[k]
                     if def and type(def.abort) == "function" then guard(p, "abort", def.abort)(why)
@@ -263,7 +318,23 @@ do
     end
 
     SVP = {}
-    SVP.version = API_VERSION
+    SVP.version = API.major
+    SVP.api = { major = API.major, minor = API.minor }
+
+    -- "M.m" (or a number) -> major, minor; nil when it isn't a version
+    local function parseVer(v)
+        local maj, min = tostring(v):match("^%s*(%d+)%.?(%d*)%s*$")
+        if not maj then return nil end
+        return tonumber(maj), tonumber(min) or 0
+    end
+    -- whether this API serves an add-on that needs `need` (nil: an API 1 add-on, from before versions were declared)
+    local function serves(need)
+        if need == nil then return true end
+        local maj, min = parseVer(need)
+        if not maj then return false, "its def.api \"" .. tostring(need) .. "\" isn't a version (\"2.0\")" end
+        if maj >= 1 and (maj < API.major or (maj == API.major and min <= API.minor)) then return true end
+        return false, string.format("it needs add-on API %d.%d; this Survival has %d.%d", maj, min, API.major, API.minor)
+    end
 
     function SVP.register(kind, def)
         local p = PLUGINS.current
@@ -276,13 +347,23 @@ do
             return false, "def.kind with a spawn function needed"
         end
         if type(def.name) == "string" and def.name ~= "" then p.name = def.name:sub(1, 40) end
-        p.ver, p.coop = tostring(def.ver or "?"):sub(1, 20), false
+        local okV, whyV = serves(def.api)
+        if not okV then p.refused = whyV; plog(p, "not loaded: " .. whyV); return false, whyV end
+        for _, fn in ipairs(type(def.requires) == "table" and def.requires or {}) do
+            if type(_G[fn]) ~= "function" then
+                local why = "it requires " .. tostring(fn) .. ", which this game doesn't have"
+                p.refused = why; plog(p, "not loaded: " .. why); return false, why
+            end
+        end
+        if def.check ~= nil and type(def.check) ~= "function" then return false, "def.check must be a function" end
+        if type(def.name) == "string" and def.name ~= "" then p.name = def.name:sub(1, 40) end
+        p.ver, p.coop, p.api = tostring(def.ver or "?"):sub(1, 20), false, def.api and tostring(def.api) or "1"
         local c = {}
         for k, v in pairs(type(def.cfg) == "table" and def.cfg or {}) do c[k] = v end
         if c.enabled == nil then c.enabled = true end
         local n = iniOver(kind, c)
         CFG.specials[kind] = c
-        SPC.kinds[kind] = kindEntry(p, def.kind)
+        SPC.kinds[kind] = kindEntry(p, def.kind, def.check)
         PLUGINS.kinds[kind] = p
         p.defs = p.defs or {}
         p.defs[kind] = def.kind                       -- (abort / over for a round whose run ended: runCheck)
@@ -411,17 +492,54 @@ do
         PLUGINS.going[#PLUGINS.going + 1] = { p = p, fn = guard(p, "going", fn) }
         return true
     end
+    -- SVP.on(event, fn): Survival's moments, any add-on. fn(now, ...) on the game thread:
+    --   "runStart" (round 1 of a run is on), "roundStart" (round), "roundEnd" (round), "runEnd" (its last round),
+    --   "levelGoing" (the level is being torn down: touch no game object, as SVP.going).
+    -- runEnd and levelGoing may come while the level goes: a handler must not touch a game object then.
+    local EVENTS = { runStart = true, roundStart = true, roundEnd = true, runEnd = true, levelGoing = true }
+    PLUGINS.on = {}
+    function SVP.on(event, fn)
+        local p = PLUGINS.current or PLUGINS.running
+        if not (p and EVENTS[event] and type(fn) == "function") then return false end
+        if event == "levelGoing" then return SVP.going(fn) end
+        PLUGINS.on[#PLUGINS.on + 1] = { p = p, ev = event, fn = guard(p, event, fn) }
+        return true
+    end
+    local function emit(ev, now, a)
+        for _, e in ipairs(PLUGINS.on) do if e.ev == ev and not e.p.off then e.fn(now, a) end end
+    end
+    -- the run and its round as Survival's tick sees them: the events above when they change
+    local seenRun, seenRound = nil, nil
+    local function eventsTick(now)
+        local run, round = D, D and D.round or nil
+        if seenRun ~= nil and run ~= seenRun then
+            if seenRound then emit("roundEnd", now, seenRound) end
+            emit("runEnd", now, seenRound)
+            seenRound = nil
+        end
+        if run ~= nil and run ~= seenRun then emit("runStart", now) end
+        seenRun = run
+        if run ~= nil and round ~= seenRound then
+            if seenRound then emit("roundEnd", now, seenRound) end
+            if round then emit("roundStart", now, round) end
+            seenRound = round
+        end
+    end
+
     -- (sv_main.lua's tick job, on the game thread, each tick's second half)
     function PLUGINS.tick()
         local now = os.clock()
         local okR, errR = pcall(runCheck, now)
         if not okR then log("plugins: run check error " .. tostring(errR)) end
+        local okE, errE = pcall(eventsTick, now)
+        if not okE then log("plugins: events error " .. tostring(errE)) end
         -- (the round-over rule, 11-09: nothing of a plugin's reads a game object while the level is being torn down:
         -- the Excalibur port's four crashes of that kind. Survival's teardown flag is levelGoing; every job waits it out)
         if levelGoing and levelGoing() then
             if not PLUGINS.wentGoing then                  -- (once, the first tick of it: SVP.going's jobs, no game object)
                 PLUGINS.wentGoing = true
                 for _, e in ipairs(PLUGINS.going) do if not e.p.off then e.fn(now) end end
+                for _, p in ipairs(PLUGINS.loaded) do bgmBack(p, "the level is going") end
             end
             return
         end
@@ -434,8 +552,47 @@ do
             end
         end
     end
-    function SVP.send() return false end
-    function SVP.on() return false end
+    -- co-op's add-on channel (host -> joiners): API 2.1. Stubs until then; an add-on can test for it
+    SVP.net = { send = function() return false end, on = function() return false end, ready = false }
+    function SVP.send() return false end                -- (API 1's name for it)
+
+    -- An add-on's native mod can give the API what Survival's runtime hasn't got, by name:
+    --   SVP.provide("hurtPlayer", fn): fn(playerAddress, -healthPoints, causerAddress) -> 1 = dealt through the
+    --   game's own health path (the player's ModifyHealthInternal), so a lethal hit is the game's own death.
+    -- Survival's own runtime function wins when it has one (SV_HurtPlayer). The first provider of a name keeps it.
+    PLUGINS.providers = {}
+    local PROVIDES = { hurtPlayer = "SV_HurtPlayer" }
+    function SVP.provide(name, fn)
+        local p = PLUGINS.current or PLUGINS.running
+        if not (p and PROVIDES[name] and type(fn) == "function") then return false end
+        if PLUGINS.providers[name] then return false, "already given by " .. tostring(PLUGINS.providers[name].p.name) end
+        PLUGINS.providers[name] = { p = p, fn = guard(p, "provide " .. name, fn) }
+        plog(p, "gives " .. name)
+        return true
+    end
+    local function provider(name)
+        local own = _G[PROVIDES[name]]
+        if type(own) == "function" then return own end
+        local e = PLUGINS.providers[name]
+        return e and not e.p.off and e.fn or nil
+    end
+
+    -- whether o is still the engine's live object (the GUObjectArray check): ask it, not IsValid, before using anything
+    -- kept between ticks (an actor, an asset, a component). IsValid can pass on freed memory
+    function SVP.liveObj(o) return o ~= nil and liveObj(o) == true end
+
+    -- Survival's music off (false) for an add-on's own track, or back (true). Given back by the API in any case when
+    -- the add-on's round ends, its run ends, the level goes or the add-on is switched off.
+    function SVP.bgm(on)
+        local p = PLUGINS.current or PLUGINS.running
+        if not p then return false end
+        if on then bgmBack(p, "the add-on's call"); return true end
+        if p.bgmMuted then return true end
+        if type(SV_PlayBGM) ~= "function" or SVP.levelGoing() then return false end
+        local ok, r = pcall(SV_PlayBGM, "AKE_System_BGM_Mute_On")
+        if ok and type(r) == "number" and r > 0 then p.bgmMuted = true; return true end
+        return false
+    end
 
     -- Sound, effects and the player's plane (version 1, second part). Each is Survival's own way of doing it
     -- (sv_escort_laser.lua's sound / fx, sv_decoy.lua's sure kill), so a plugin needs no UE calls of its own for them.
@@ -615,15 +772,14 @@ do
         end
         if not before then return false end
         if DOWN and DOWN.me and DOWN.me() == true then return false, before, before, "down" end
-        -- (11-09, rule 24 / Inveigh's main laser: the game's own health path when a runtime gives it (EXC_HurtPlayer, the
-        -- player's ModifyHealthInternal: a full hit kills as a stock missile does, the death Survival's own); else as before)
-        if type(EXC_HurtPlayer) == "function" then
+        -- the game's own health path when a runtime gives it (hurtPlayer: the player's ModifyHealthInternal, so a
+        -- lethal hit is the game's own death); else the health is written and a lethal hit is the stock sure kill.
+        -- hurtPlayer takes HEALTH points (MaxHealth units); HealthInternal reads x 10
+        local hurt = provider("hurtPlayer")
+        if hurt then
             local pa, ca = addrOf and addrOf(a), causer and addrOf and addrOf(causer)
             if pa then
-                -- (11-11, run 35: EXC_HurtPlayer takes HEALTH points (the player's ModifyHealthInternal clamps health +
-                -- delta to MaxHealth, 113), not HealthInternal's x 10: -(n * 10) made every non-lethal hit 10x (an
-                -- 11-health UAV-B hit read 1130 -> 30). The x 10 below is right: it writes HealthInternal itself)
-                local okH, rc = pcall(EXC_HurtPlayer, pa, -n, ca or pa)
+                local okH, rc = pcall(hurt, pa, -n, ca or pa)
                 if okH and rc == 1 then return true, before, healthOf(a), "the game's own health path" end
             end
         end
